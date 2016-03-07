@@ -1,0 +1,118 @@
+---
+# file: tasks/install-grafana.yml
+#
+# Install Prometheus grafana.
+#
+# @see http://prometheus.io/docs/introduction/getting_started/
+#
+
+- block:
+
+    - name: set internal variables for convenience
+      set_fact:
+        prometheus_grafana_tarball_url: "https://github.com/prometheus/grafana/releases/download/{{ prometheus_grafana_version }}/grafana-{{ prometheus_grafana_version }}.linux-amd64.tar.gz"
+        prometheus_grafana_untar_path: "{{ prometheus_install_path }}"
+      when: ansible_userspace_bits == "64"
+
+    - name: set internal variables for convenience
+      set_fact:
+        prometheus_grafana_tarball_url: "https://github.com/prometheus/grafana/releases/download/{{ prometheus_grafana_version }}/grafana-{{ prometheus_grafana_version }}.linux-386.tar.gz"
+        prometheus_grafana_untar_path: "{{ prometheus_install_path }}"
+      when: ansible_userspace_bits == "32"
+
+    - name: download and uncompress grafana tarball
+      unarchive:
+        src: "{{ prometheus_grafana_tarball_url }}"
+        dest: "{{ prometheus_grafana_untar_path }}"
+        copy: no
+
+  when: prometheus_grafana_version != "git"
+
+
+- block:
+
+    - name: set internal variables for convenience
+      set_fact:
+        prometheus_grafana_git_url: "https://github.com/prometheus/grafana.git"
+        prometheus_grafana_src_path: "{{ prometheus_workdir }}/src/github.com/prometheus/grafana"
+
+    - name: install gcc for compiling go-sqlite3
+      action: "{{ ansible_pkg_mgr }} name=gcc state=present"
+
+    - name: install static libs for compiling source
+      yum: name=glibc-static state=present
+      when: ansible_pkg_mgr == "yum"
+
+    - name: delete the grafana build directory, if necessary
+      file: path="{{ prometheus_grafana_src_path }}" state=absent
+      when: prometheus_rebuild
+
+    - name: clone the grafana project src
+      git:
+        repo: "{{ prometheus_grafana_git_url }}"
+        dest: "{{ prometheus_grafana_src_path }}"
+        force: yes
+
+    - name: build grafana source code
+      command: make format build
+      #command: make
+      args:
+        chdir: "{{ prometheus_grafana_src_path }}"
+        creates: grafana
+      environment:
+        GO15VENDOREXPERIMENT: 1
+        GOROOT: "{{ prometheus_goroot }}"
+        GOPATH: "{{ prometheus_gopath }}:{{ prometheus_grafana_src_path }}:{{ prometheus_workdir }}"
+        PATH: "{{ ansible_env.PATH }}:{{ prometheus_goroot }}/bin:{{ prometheus_gopath }}/bin"
+
+    - name: copy the built grafana to the install path
+      command: "cp {{ prometheus_grafana_src_path }}/grafana {{ prometheus_install_path }}"
+      args:
+        creates: "{{ prometheus_install_path }}/grafana"
+
+  when: prometheus_grafana_version == "git"
+
+- name: rename grafana binary
+  command : mv {{ prometheus_install_path }}/grafana-{{ prometheus_grafana_version }}.linux-amd64 {{ prometheus_install_path }}/grafana
+
+- name: set permissions, owner and group
+  file:
+    path: "{{ prometheus_install_path }}/grafana"
+    owner: "{{ prometheus_user }}"
+    group: "{{ prometheus_group }}"
+    mode: "go-w"
+
+- name: mkdir for grafana data (silences.json for now)
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ prometheus_user }}"
+    group: "{{ prometheus_group }}"
+    mode: "u=rwx,g=rx,o="
+  with_items:
+    - "{{ prometheus_grafana_db_path }}"
+
+- name: set grafana variables
+  copy: src="../files/etc-default-grafana"  dest=/etc/default/grafana
+
+- name: copy INIT script to server
+  template: src="../templates/grafana.sysvinit.{{ ansible_os_family|lower }}.sh.j2"  dest="/etc/init.d/grafana"  mode="a+x"
+
+- name: set INIT status
+  service: name=grafana enabled=yes
+
+#- name: set INIT status and start
+#  service: name=grafana state=started
+#  when: prometheus_use_service|bool
+
+- name: install grafana config file from playbook's, if any
+  template: src="{{ playbook_dir }}/{{ prometheus_grafana_conf }}"  dest="{{ prometheus_config_path }}/grafana.yml"
+  when: prometheus_grafana_conf is defined
+  notify:
+    - restart grafana
+
+- name: install default (empty) grafana config file, if necessary
+  copy: src="../files/grafana.empty.yml"  dest="{{ prometheus_config_path }}/grafana.yml"
+  when: prometheus_grafana_conf is not defined
+  notify:
+    - restart grafana

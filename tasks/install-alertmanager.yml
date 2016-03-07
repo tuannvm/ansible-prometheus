@@ -72,7 +72,8 @@
 
   when: prometheus_alertmanager_version == "git"
 
-
+- name: rename alertmanager binary
+  command : mv {{ prometheus_install_path }}/alertmanager-{{ prometheus_alertmanager_version }}.linux-amd64 {{ prometheus_install_path }}/alertmanager
 
 - name: set permissions, owner and group
   file:

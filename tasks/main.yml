@@ -63,3 +63,7 @@
 - name: install alertmanager
   include: install-alertmanager.yml
   when: '"alertmanager" in prometheus_components'
+
+- name: install grafana
+  include: install-grafana.yml
+  when: '"grafana" in prometheus_components'

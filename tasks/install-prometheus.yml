@@ -110,6 +110,9 @@
 - name: set INIT status
   service: name=prometheus enabled=yes
 
+- name: create pid file
+  command: touch {{ prometheus_pid_path }}/prometheus.pid
+
 - name: copy prometheus main config file from role's default, if necessary
   template:
     src: "../templates/prometheus.yml.j2"
